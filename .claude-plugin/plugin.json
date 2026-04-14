@@ -1,0 +1,19 @@
+{
+  "name": "wide-research-skills",
+  "description": "Multi-agent parallel research orchestration skills for Claude Code and Codex CLI — divide-and-conquer with isolated context windows",
+  "version": "1.0.0",
+  "author": {
+    "name": "virgil0418"
+  },
+  "homepage": "https://github.com/virgil0418/wide-research-skills",
+  "repository": "https://github.com/virgil0418/wide-research-skills",
+  "license": "MIT",
+  "keywords": [
+    "research",
+    "multi-agent",
+    "parallel",
+    "orchestration",
+    "wide-research",
+    "skills"
+  ]
+}
