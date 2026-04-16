@@ -1,97 +1,61 @@
 ---
 name: wide-research
-description: Use when performing large-scale research tasks requiring parallel investigation across multiple dimensions, or when the user mentions "Wide Research", or when a research task involves 5+ independent data sources that need individual analysis before synthesis, or when a single agent would hit context window limits
+description: Use when the user mentions "Wide Research", or when a Claude research task should be decomposed into parallel sub-agents before synthesis
 ---
 
 # Wide Research for Claude Code
 
-## Overview
+这是 Claude 专用 skill，不依赖 Codex 版本文档。
 
-Divide-and-conquer orchestration for large-scale research with Claude Code. Break a research task into independent subtasks, dispatch a separate Agent for each (isolated context window), run in parallel, aggregate programmatically, then polish section-by-section.
+## 核心目标
 
-**Why this exists:** All LLMs suffer context window degradation — once output fills 20-50% of context, quality drops (skipping items, summarizing instead of processing, missing entries). Isolated agent contexts solve this.
+把大型调研任务拆成多个彼此独立的子任务，交给并行子代理分别处理，然后通过脚本或文件操作做程序化聚合，最后由主控按章节打磨成正式报告。
 
-**Inspired by:** [grapeot/codex_wide_research](https://github.com/grapeot/codex_wide_research), adapted for Claude Code's tool system.
+## 适用场景
 
-## When to Use
+- 用户明确提到 `Wide Research`
+- 调研对象可自然拆成 5 个以上独立维度，例如主题、公司、链接、国家、时间片、代码模块或数据分片
+- 单个代理直接完成会遇到上下文过载、覆盖不全或资料量太大
 
-```dot
-digraph when_to_use {
-    "Research task large?" [shape=diamond];
-    "Subtasks independent?" [shape=diamond];
-    "5+ data sources?" [shape=diamond];
-    "Use wide-research" [shape=box style=filled fillcolor=lightgreen];
-    "Handle directly" [shape=box];
+## 不适用场景
 
-    "Research task large?" -> "Subtasks independent?" [label="yes"];
-    "Research task large?" -> "Handle directly" [label="no"];
-    "Subtasks independent?" -> "5+ data sources?" [label="yes"];
-    "Subtasks independent?" -> "Handle directly" [label="no - coupled"];
-    "5+ data sources?" -> "Use wide-research" [label="yes"];
-    "5+ data sources?" -> "Use wide-research" [label="no - but still useful"];
-}
-```
+- 任务很小，1 到 2 个对象就能覆盖
+- 子问题彼此强耦合，拆开后反而失真
+- 结果依赖频繁共享的中间状态，无法稳定并发
 
-**Use when:** User mentions "Wide Research", or task involves researching 5+ independent dimensions (topics, URLs, datasets, modules) needing individual analysis before synthesis.
+## 执行流程
 
-**Don't use when:** Task is small (1-2 items), subtasks are coupled, or results depend on shared mutable state.
+1. 先由主控亲自摸底，不允许一开始就把理解工作外包给子代理。
+2. 明确成功标准、输出格式、交付深度、时效边界和风险点。
+3. 设计子任务清单，每个子任务只负责一个清晰维度，并给出唯一 ID。
+4. 为每个子任务写出独立 prompt，约束输入范围、预期输出、引用要求、失败兜底和停止条件。
+5. 并行派发子代理执行，实时记录开始时间、结束时间、状态和失败原因。
+6. 对失败子任务至少重试一次；仍失败则输出带原因和后续建议的 Markdown 段落，不能留下空白。
+7. 用脚本或文件处理程序聚合所有子任务输出，生成基础稿；禁止直接让一个模型一次性合并所有结果。
+8. 主控通读基础稿与关键原始材料，设计正式成稿的大纲和章节顺序。
+9. 按章节逐步润色成稿，每章完成后立即核对事实、引用、语言和数据，不允许整篇删除后一次性重写。
+10. 最终把成稿保存为独立文件，只向用户回报文件路径、核心结论和必要的后续动作。
 
-## Core Pattern
+## 强制规则
 
-**Before:** Single agent attempts everything → hits context limit → starts skipping, summarizing, losing depth.
+- 聚合必须程序化完成，不能把合并工作直接交给单次模型回复
+- 先完整阅读资料，再总结，不允许按固定长度机械截断
+- 获取到的原始材料优先缓存到本地工作目录，再进行后续处理
+- 中间脚本、日志、缓存和临时结果要放进独立工作目录，避免污染主目录
+- 最终交付必须是结构完整、引用可追溯的正式文件
+- 如果任务规模不值得并行，必须主动收缩为普通流程，而不是硬套 Wide Research
 
-**After:** Orchestrator decomposes → parallel Agent tool calls (each with isolated context) → programmatic aggregation → section-by-section polish → deep, comprehensive report.
+## Claude 工具约束
 
-## Tool Mapping (Codex → Claude Code)
+- 优先使用当前环境真实可用的搜索、网页读取、文件读写和子代理能力
+- 子代理之间的职责边界必须清晰，避免多个子代理处理同一批对象
+- 可以并行调度多个子代理，但主控不能把关键判断全部外包
+- 若环境中的工具名与预期不同，使用同等能力替代，并在过程里说明替代关系
 
-| Original Codex | Claude Code Equivalent |
-|----------------|----------------------|
-| `codex exec` child process | Agent tool (subagent_type="general-purpose") |
-| Bash scheduler (`run_children.sh`) | Concurrent Agent tool calls in single message |
-| `--sandbox workspace-write` | Standard workspace file write permissions |
-| `--output-last-message` | Agent returns result directly |
-| `tavily_search` MCP | WebSearch tool |
-| `tavily_extract` MCP | `mcp__web_reader__webReader` |
-| `codex mcp list` | Check available tools in environment |
-| `timeout` command | Agent calls have built-in timeouts |
-| `tee logs/<id>.log` | Agent output returned directly |
+## 常见错误
 
-## Workflow (9 phases)
-
-| Phase | Action | Owner |
-|-------|--------|-------|
-| 0 | Pre-run planning & reconnaissance | You (mandatory, no delegation) |
-| 1 | Initialize run directory, clarify goals | You |
-| 2 | Identify sub-goals, assign IDs | You |
-| 3 | Design child agent prompts | You |
-| 4 | Generate prompt files from templates | You |
-| 5 | Parallel dispatch via Agent tool calls | You (concurrent) |
-| 6 | Programmatic aggregation (Bash/Read, no LLM) | You |
-| 7 | Digest aggregate, design polished outline | You |
-| 8 | Section-by-section polishing | You |
-| 9 | Deliver standalone report file | You |
-
-## Key Rules
-
-- **Programmatic aggregation only** — concatenate child outputs via Bash/Read, never use an LLM to merge
-- **Cache first** — persist fetched content to `raw/` before processing
-- **Read fully before summarizing** — no truncation by fixed length
-- **Attempt twice on failure** — then write error section, never leave gaps
-- **Section-by-section polish** — never wipe and rewrite entire document in one pass
-- **Deliver as file** — provide file path + synopsis, never paste full report in chat
-- **Two-Step QA** before release: (1) verify staged edits, (2) gauge depth
-
-## Common Mistakes
-
-- Dispatching agents sequentially instead of in parallel (wastes time)
-- Letting one agent handle multiple subtasks (context overflow)
-- Aggregating via LLM synthesis instead of programmatic concatenation
-- Skipping the reconnaissance phase (leads to poor decomposition)
-- Pasting final report into chat instead of saving as file
-- Truncating source material instead of reading fully
-
-## References
-
-- **Full procedure with all details:** See `./orchestration-reference.md`
-- **Child agent prompt template:** See `./child-agent-prompt-template.md`
-- **Codex CLI version:** See `../wide-research-codex/` for the original Codex skill
+- 没做摸底就直接并行，导致子任务拆分失真
+- 一个子代理承担多个维度，重新把上下文压回单点
+- 用模型直接综合所有子报告，导致聚合阶段再次溢出
+- 为了快而整篇重写，导致事实和引用丢失
+- 最终把整篇报告贴在聊天里，而不是交付文件路径
